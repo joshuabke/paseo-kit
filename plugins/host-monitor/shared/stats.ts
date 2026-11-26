@@ -7,6 +7,21 @@ const sampleSchema = z.object({
   memoryPercent: z.number(),
   rxBytesPerSec: z.number(),
   txBytesPerSec: z.number(),
+  /** All NVIDIA GPUs averaged; null on a host without one. */
+  gpuPercent: z.number().nullable(),
+  /** Power draw of all NVIDIA GPUs added together; null when there is none or it reports none. */
+  gpuWatts: z.number().nullable(),
+});
+
+/** One NVIDIA GPU as nvidia-smi reports it; a field the card does not report is null. */
+const gpuSchema = z.object({
+  name: z.string(),
+  utilizationPercent: z.number().nullable(),
+  powerWatts: z.number().nullable(),
+  powerLimitWatts: z.number().nullable(),
+  memoryUsedBytes: z.number().nullable(),
+  memoryTotalBytes: z.number().nullable(),
+  temperatureCelsius: z.number().nullable(),
 });
 
 const diskSchema = z.object({
@@ -44,6 +59,8 @@ export const hostStatsRpc = defineRpc({
       .object({ rxTotalBytes: z.number(), txTotalBytes: z.number() })
       .nullable(),
     disks: z.array(diskSchema),
+    /** Empty when the host has no NVIDIA GPU or no nvidia-smi. */
+    gpus: z.array(gpuSchema),
     sampleIntervalMs: z.number(),
     current: sampleSchema,
     history: z.array(sampleSchema),
@@ -51,6 +68,7 @@ export const hostStatsRpc = defineRpc({
 });
 
 export type HostSample = z.infer<typeof sampleSchema>;
+export type GpuUsage = z.infer<typeof gpuSchema>;
 export type DiskUsage = z.infer<typeof diskSchema>;
 export type MemoryUsage = z.infer<typeof memorySchema>;
 export type MemoryPressure = NonNullable<MemoryUsage["pressure"]>;

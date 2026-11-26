@@ -1,5 +1,9 @@
 import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
-import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugin/client";
+import {
+  useSettings,
+  type PluginPopoverProps,
+  type PluginSidebarItemProps,
+} from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useState } from "react";
 import {
@@ -9,7 +13,8 @@ import {
   type LayoutChangeEvent,
   type PressableStateCallbackType,
 } from "react-native";
-import type { hostStatsRpc } from "../shared/stats";
+import { displaySettings, hiddenMetrics, type MetricKey } from "../shared/settings";
+import type { GpuUsage, hostStatsRpc } from "../shared/stats";
 import { formatBytes, formatCompactRate, formatPercent, formatRate, formatUptime } from "./format";
 import {
   Meter,
@@ -40,8 +45,6 @@ const PAIR_SEPARATOR_WIDTH = 8;
 
 type HostStats = RpcOutput<typeof hostStatsRpc>;
 
-type MetricKey = "cpu" | "memory" | "disk" | "network";
-
 /** Which metrics fit, and whether the percentages get meters. */
 interface LineLayout {
   shown: readonly Metric[];
@@ -60,6 +63,10 @@ interface Metric {
 
 // On a narrow sidebar, network goes first, then disk; CPU and RAM always stay.
 const DROP_ORDER: readonly MetricKey[] = ["network", "disk"];
+
+function formatWatts(watts: number): string {
+  return `${Math.round(watts)}W`;
+}
 
 function metricsOf(stats: HostStats): Metric[] {
   const { current, memory, network, disks } = stats;
@@ -97,11 +104,24 @@ function metricsOf(stats: HostStats): Metric[] {
       texts: [formatCompactRate(current.rxBytesPerSec), formatCompactRate(current.txBytesPerSec)],
     });
   }
+  if (current.gpuPercent !== null) {
+    metrics.push({
+      key: "gpu",
+      icon: "Gpu",
+      texts:
+        current.gpuWatts === null
+          ? [formatPercent(current.gpuPercent)]
+          : [formatPercent(current.gpuPercent), formatWatts(current.gpuWatts)],
+      percent: current.gpuPercent,
+      severity: percentSeverity(current.gpuPercent),
+    });
+  }
   return metrics;
 }
 
-// The widest text a slot can hold: rounded percents top out at 100%, compact rates at 4 characters.
-const SLOT_TEMPLATES = ["100%", "888K", "8.8M"];
+// The widest text a slot can hold: rounded percents top out at 100%, compact rates and GPU watts
+// at 4 characters.
+const SLOT_TEMPLATES = ["100%", "888K", "8.8M", "888W"];
 // Used until the templates are measured.
 const ESTIMATED_SLOT_WIDTH = FONT_SIZE * 2.6;
 const TEXT_GAP = 4;
@@ -214,19 +234,26 @@ function triggerStyle(theme: PluginTheme) {
   });
 }
 
-function describe(stats: HostStats): string {
+/** The line read aloud; it names only the metrics the line shows. */
+function describe(stats: HostStats, hidden: readonly MetricKey[]): string {
   const { current, memory, network, disks } = stats;
-  const parts = [
-    `CPU ${formatPercent(current.cpuPercent)}`,
-    `memory ${formatPercent(memoryPercent(memory))}`,
-  ];
-  if (memory.pressure) parts.push(`memory pressure ${memory.pressure}`);
-  if (disks.length > 0) parts.push(`disk ${formatPercent(sumDisks(disks).percent)}`);
-  if (network) {
+  const shown = (key: MetricKey) => !hidden.includes(key);
+  const parts: string[] = [];
+  if (shown("cpu")) parts.push(`CPU ${formatPercent(current.cpuPercent)}`);
+  if (shown("memory")) {
+    parts.push(`memory ${formatPercent(memoryPercent(memory))}`);
+    if (memory.pressure) parts.push(`memory pressure ${memory.pressure}`);
+  }
+  if (shown("disk") && disks.length > 0) parts.push(`disk ${formatPercent(sumDisks(disks).percent)}`);
+  if (shown("network") && network) {
     parts.push(
       `download ${formatRate(current.rxBytesPerSec)}`,
       `upload ${formatRate(current.txBytesPerSec)}`,
     );
+  }
+  if (shown("gpu") && current.gpuPercent !== null) {
+    parts.push(`GPU ${formatPercent(current.gpuPercent)}`);
+    if (current.gpuWatts !== null) parts.push(`GPU power ${formatWatts(current.gpuWatts)}`);
   }
   return `Host status: ${parts.join(", ")}`;
 }
@@ -235,8 +262,9 @@ function layoutWidth(event: LayoutChangeEvent): number {
   return event.nativeEvent.layout.width;
 }
 
-export function HostStatusItem({ theme, openPopover }: PluginSidebarItemProps) {
+export function HostStatusItem({ theme, host, openPopover }: PluginSidebarItemProps) {
   const { data } = useHostStats();
+  const settings = useSettings(displaySettings);
   const [available, setAvailable] = useState<number | null>(null);
   const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
   const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
@@ -245,16 +273,20 @@ export function HostStatusItem({ theme, openPopover }: PluginSidebarItemProps) {
     setMeasuredSlot((current) => Math.max(current ?? 0, width));
   }, []);
 
-  // Like the built-in usage summary: nothing until there is something to show.
-  if (!data) return null;
-  const metrics = metricsOf(data);
+  // Like the built-in usage summary: nothing until there is something to show. Settings that
+  // cannot be read hide nothing.
+  if (!data || settings.status === "loading") return null;
+  const hidden: readonly MetricKey[] =
+    settings.status === "ready" ? hiddenMetrics(settings.values, host.id) : [];
+  const metrics = metricsOf(data).filter((metric) => !hidden.includes(metric.key));
+  if (metrics.length === 0) return null;
   const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
   const layout = chooseLayout(available, metrics, slotWidth);
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={describe(data)}
+      accessibilityLabel={describe(data, hidden)}
       onPress={() => openPopover(HostPopover)}
       style={triggerStyle(theme)}
     >
@@ -389,7 +421,69 @@ function DiskSection({ theme, disks }: { theme: PluginTheme; disks: HostStats["d
   );
 }
 
-function HostPopover({ theme, layout }: PluginPopoverProps) {
+/** Power, VRAM and temperature of each GPU, one line per card. */
+function gpuDetail(gpu: GpuUsage): string {
+  const parts: string[] = [];
+  if (gpu.powerWatts !== null) {
+    parts.push(
+      gpu.powerLimitWatts === null
+        ? `${gpu.powerWatts.toFixed(0)} W`
+        : `${gpu.powerWatts.toFixed(0)} / ${gpu.powerLimitWatts.toFixed(0)} W`,
+    );
+  }
+  if (gpu.memoryUsedBytes !== null && gpu.memoryTotalBytes !== null) {
+    parts.push(`VRAM ${formatBytes(gpu.memoryUsedBytes)} / ${formatBytes(gpu.memoryTotalBytes)}`);
+  }
+  if (gpu.temperatureCelsius !== null) parts.push(`${gpu.temperatureCelsius} °C`);
+  return parts.join(" · ");
+}
+
+function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) {
+  const { current, history, gpus } = stats;
+  const powerLimit = gpus.reduce((sum, gpu) => sum + (gpu.powerLimitWatts ?? 0), 0);
+  const single = gpus.length === 1 ? gpus[0] : undefined;
+  return (
+    <>
+      {current.gpuPercent !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Gpu"
+          label={single ? `GPU · ${single.name}` : `GPU · ${gpus.length} GPUs`}
+          value={formatPercent(current.gpuPercent)}
+          color={loadColor(theme, current.gpuPercent)}
+          values={history.map((s) => s.gpuPercent ?? 0)}
+          detail={single ? gpuDetail(single) : undefined}
+        />
+      ) : null}
+      {!single
+        ? gpus.map((gpu, index) => (
+            <Caption key={index} theme={theme} text={`${gpu.name}: ${gpuDetail(gpu)}`} />
+          ))
+        : null}
+      {current.gpuWatts !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Zap"
+          label={powerLimit > 0 ? `GPU power · limit ${powerLimit.toFixed(0)} W` : "GPU power"}
+          value={`${current.gpuWatts.toFixed(0)} W`}
+          color={theme.colors.accent}
+          // Against the power limit, so a card at its limit fills the chart; else against the peak.
+          values={
+            powerLimit > 0
+              ? history.map((s) => ((s.gpuWatts ?? 0) / powerLimit) * 100)
+              : scaleToPeak(history, (s) => s.gpuWatts ?? 0)
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+
+function HostPopover({
+  theme,
+  layout,
+  openScreen,
+}: PluginPopoverProps) {
   const { data } = useHostStats();
   const rootStyle = {
     gap: 10,
@@ -410,7 +504,20 @@ function HostPopover({ theme, layout }: PluginPopoverProps) {
   return (
     <View style={rootStyle}>
       <View style={{ gap: 2 }}>
-        <Text style={{ color: theme.colors.foreground, fontSize: FONT_SIZE + 1 }}>{data.hostname}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: ICON_GAP }}>
+          <Text style={{ flex: 1, color: theme.colors.foreground, fontSize: FONT_SIZE + 1 }}>
+            {data.hostname}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose what the sidebar shows for this host"
+            hitSlop={8}
+            // openScreen closes the popover, and on a phone the sidebar drawer.
+            onPress={() => openScreen({ screenId: "display" })}
+          >
+            <Icon name="SlidersHorizontal" size={ICON_SIZE} color={theme.colors.foregroundMuted} />
+          </Pressable>
+        </View>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: FONT_SIZE - 1 }}>
           up {formatUptime(data.uptimeSeconds)} · load{" "}
           {data.loadAverage.map((n) => n.toFixed(2)).join(" ")}
@@ -453,6 +560,7 @@ function HostPopover({ theme, layout }: PluginPopoverProps) {
           />
         </>
       ) : null}
+      {data.gpus.length > 0 ? <GpuSection theme={theme} stats={data} /> : null}
       {disks.length > 0 ? <DiskSection theme={theme} disks={disks} /> : null}
     </View>
   );
