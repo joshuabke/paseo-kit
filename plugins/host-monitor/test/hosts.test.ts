@@ -6,8 +6,8 @@ import { displaySettings, hostItemId } from "../shared/settings";
 const CONTRIBUTION_ID = /^[a-z][a-z0-9-]*$/;
 
 test("each host gets its own sidebar item, so Paseo does not merge them into one", () => {
-  const ids = ["Joshua-PC", "factory", "joshuas-mbp.local"].map(hostItemId);
-  assert.deepEqual(ids, ["host-status-joshua-pc", "host-status-factory", "host-status-joshuas-mbp-local"]);
+  const ids = ["Gaming-PC", "build-box", "studio-mac.local"].map(hostItemId);
+  assert.deepEqual(ids, ["host-status-gaming-pc", "host-status-build-box", "host-status-studio-mac-local"]);
   for (const id of ids) assert.match(id, CONTRIBUTION_ID);
 });
 
