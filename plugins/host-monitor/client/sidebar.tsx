@@ -451,7 +451,6 @@ function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) 
           value={formatPercent(current.gpuPercent)}
           color={loadColor(theme, current.gpuPercent)}
           values={history.map((s) => s.gpuPercent ?? 0)}
-          detail={single ? gpuDetail(single) : undefined}
         />
       ) : null}
       {!single
