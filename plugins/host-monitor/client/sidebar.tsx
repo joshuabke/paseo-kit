@@ -477,21 +477,21 @@ function gpuDetail(gpu: GpuUsage): string {
 function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) {
   const { current, history, gpus } = stats;
   const powerLimit = gpus.reduce((sum, gpu) => sum + (gpu.powerLimitWatts ?? 0), 0);
-  const [only] = gpus;
+  const single = gpus.length === 1 ? gpus[0] : undefined;
   return (
     <>
       {current.gpuPercent !== null ? (
         <PreviewRow
           theme={theme}
           icon="Gpu"
-          label={gpus.length === 1 && only ? `GPU · ${only.name}` : `GPU · ${gpus.length} GPUs`}
+          label={single ? `GPU · ${single.name}` : `GPU · ${gpus.length} GPUs`}
           value={formatPercent(current.gpuPercent)}
           color={loadColor(theme, current.gpuPercent)}
           values={history.map((s) => s.gpuPercent ?? 0)}
-          detail={gpus.length === 1 && only ? gpuDetail(only) : undefined}
+          detail={single ? gpuDetail(single) : undefined}
         />
       ) : null}
-      {gpus.length > 1
+      {!single
         ? gpus.map((gpu, index) => (
             <Caption key={index} theme={theme} text={`${gpu.name}: ${gpuDetail(gpu)}`} />
           ))
