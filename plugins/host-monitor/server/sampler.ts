@@ -5,7 +5,14 @@ import os from "node:os";
 import { promisify } from "node:util";
 import type { RpcOutput } from "@getpaseo/plugin";
 import type { hostStatsRpc } from "../shared/stats";
-import type { DiskUsage, GpuUsage, HostSample, MemoryPressure, MemoryUsage } from "../shared/stats";
+import {
+  sumGpuMemory,
+  type DiskUsage,
+  type GpuUsage,
+  type HostSample,
+  type MemoryPressure,
+  type MemoryUsage,
+} from "../shared/stats";
 
 const execFileAsync = promisify(execFile);
 
@@ -429,6 +436,8 @@ export function startSampler({
     void refreshGpus();
     const utilizations = gpus.flatMap((gpu) => gpu.utilizationPercent ?? []);
     const watts = gpus.flatMap((gpu) => gpu.powerWatts ?? []);
+    const temperatures = gpus.flatMap((gpu) => gpu.temperatureCelsius ?? []);
+    const vram = sumGpuMemory(gpus);
     const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
     const sample: HostSample = {
@@ -442,6 +451,8 @@ export function startSampler({
       // if a multi-GPU host needs it.
       gpuPercent: utilizations.length > 0 ? sum(utilizations) / utilizations.length : null,
       gpuWatts: watts.length > 0 ? sum(watts) : null,
+      gpuTemperatureCelsius: temperatures.length > 0 ? Math.max(...temperatures) : null,
+      vramPercent: vram ? (vram.usedBytes / vram.totalBytes) * 100 : null,
     };
     history.push(sample);
     if (history.length > HISTORY_LENGTH) history.shift();
@@ -504,6 +515,8 @@ export function startSampler({
           cpuTemperatureCelsius: null,
           gpuPercent: null,
           gpuWatts: null,
+          gpuTemperatureCelsius: null,
+          vramPercent: null,
         },
         history: [...history],
       };
