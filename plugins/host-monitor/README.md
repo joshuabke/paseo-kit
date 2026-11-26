@@ -1,6 +1,6 @@
 # host-monitor
 
-CPU, memory, disk, network and NVIDIA GPU usage of each connected host in the sidebar footer.
+CPU, memory, disk, network and NVIDIA GPU usage of the daemon host in the sidebar footer.
 
 See [OVERVIEW.md](OVERVIEW.md) for what it shows, how it works and its limits.
 

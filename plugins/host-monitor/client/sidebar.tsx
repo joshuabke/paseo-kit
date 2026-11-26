@@ -1,6 +1,5 @@
 import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
 import {
-  useHosts,
   useSettings,
   type PluginPopoverProps,
   type PluginSidebarItemProps,
@@ -123,8 +122,6 @@ function metricsOf(stats: HostStats): Metric[] {
 // The widest text a slot can hold: rounded percents top out at 100%, compact rates and GPU watts
 // at 4 characters.
 const SLOT_TEMPLATES = ["100%", "888K", "8.8M", "888W"];
-// The host name in front of the line, when the app knows more than one host.
-const HOST_LABEL_MAX_WIDTH = 72;
 // Used until the templates are measured.
 const ESTIMATED_SLOT_WIDTH = FONT_SIZE * 2.6;
 const TEXT_GAP = 4;
@@ -240,7 +237,6 @@ function triggerStyle(theme: PluginTheme) {
 function describe(stats: HostStats): string {
   const { current, memory, network, disks } = stats;
   const parts = [
-    stats.hostname,
     `CPU ${formatPercent(current.cpuPercent)}`,
     `memory ${formatPercent(memoryPercent(memory))}`,
   ];
@@ -254,32 +250,14 @@ function describe(stats: HostStats): string {
   }
   if (current.gpuPercent !== null) parts.push(`GPU ${formatPercent(current.gpuPercent)}`);
   if (current.gpuWatts !== null) parts.push(`GPU power ${formatWatts(current.gpuWatts)}`);
-  return `Host status of ${parts.join(", ")}`;
+  return `Host status: ${parts.join(", ")}`;
 }
 
 function layoutWidth(event: LayoutChangeEvent): number {
   return event.nativeEvent.layout.width;
 }
 
-/** The host's name in front of its line, so lines from several hosts tell apart. */
-function HostLabel({ theme, label }: { theme: PluginTheme; label: string }) {
-  return (
-    <Text
-      numberOfLines={1}
-      style={{
-        maxWidth: HOST_LABEL_MAX_WIDTH,
-        marginRight: METRIC_GAP,
-        flexShrink: 0,
-        color: theme.colors.foregroundMuted,
-        fontSize: FONT_SIZE,
-      }}
-    >
-      {label}
-    </Text>
-  );
-}
-
-/** The footer line of one host; `openSettings` opens this plugin's settings on that host. */
+/** The footer line; `openSettings` opens this plugin's settings on the item's host. */
 export function createHostStatusItem(openSettings: () => void) {
   function Popover(props: PluginPopoverProps) {
     return <HostPopover {...props} openSettings={openSettings} />;
@@ -288,7 +266,6 @@ export function createHostStatusItem(openSettings: () => void) {
   return function HostStatusItem({ theme, host, openPopover }: PluginSidebarItemProps) {
     const { data } = useHostStats();
     const settings = useSettings(displaySettings);
-    const hosts = useHosts();
     const [available, setAvailable] = useState<number | null>(null);
     const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
     const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
@@ -304,16 +281,6 @@ export function createHostStatusItem(openSettings: () => void) {
       settings.status === "ready" ? (settings.values.hidden[host.id] ?? []) : [];
     const metrics = metricsOf(data).filter((metric) => !hidden.includes(metric.key));
     if (metrics.length === 0) return null;
-    const label = hosts.length > 1 ? <HostLabel theme={theme} label={host.label} /> : null;
-    // A dropped connection keeps the last numbers in the query cache; they are not current.
-    if (hosts.find((candidate) => candidate.serverId === host.id)?.status !== "online") {
-      return (
-        <View style={{ flexDirection: "row", alignItems: "center", minHeight: 28, paddingHorizontal: 8 }}>
-          <HostLabel theme={theme} label={host.label} />
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: FONT_SIZE }}>offline</Text>
-        </View>
-      );
-    }
     const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
     const layout = chooseLayout(available, metrics, slotWidth);
 
@@ -324,7 +291,6 @@ export function createHostStatusItem(openSettings: () => void) {
         onPress={() => openPopover(Popover)}
         style={triggerStyle(theme)}
       >
-        {label}
         <View
           style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", overflow: "hidden" }}
           onLayout={onAvailable}

@@ -12,7 +12,7 @@ complete, self-contained Paseo plugin project.
 
 | ID | Name | What it does |
 | --- | --- | --- |
-| [`host-monitor`](plugins/host-monitor) | Host monitor | CPU, RAM, disk, network speed and NVIDIA GPU of each connected host in the sidebar footer, with a history popover. |
+| [`host-monitor`](plugins/host-monitor) | Host monitor | CPU, RAM, disk, network speed and NVIDIA GPU of the daemon host in the sidebar footer, with a history popover. |
 | [`ccusage-stats`](plugins/ccusage-stats) | Token usage | Token usage and estimated cost of your coding agents via [ccusage](https://github.com/ccusage/ccusage): today's total, day/week/month breakdown by agent, a per-session composer pill, and optional Claude plan limits. |
 | [`file-download`](plugins/file-download) | Download file | Cmd+S or Ctrl+S downloads the file you are previewing, including files outside the workspace such as `/tmp`. |
 | [`tab-recovery`](plugins/tab-recovery) | Closed agents | Lists the agents whose tab was closed (which archives them) in the current workspace and reopens one with a press. |
@@ -20,10 +20,10 @@ complete, self-contained Paseo plugin project.
 
 ### host-monitor
 
-- One sidebar footer line per connected host that runs the plugin: CPU, RAM and disk percentage with small meters, download and upload speed under one icon, and GPU load and power on hosts with an NVIDIA GPU.
+- One sidebar footer line: CPU, RAM and disk percentage with small meters, download and upload speed under one icon, and GPU load and power on hosts with an NVIDIA GPU.
 - Yellow above 70%, red above 90%; on a narrow sidebar network speed is dropped first, then disk.
 - Popover with about three minutes of history per metric, usage of each local disk, GPU power, VRAM and temperature, uptime and load average.
-- Plugin settings choose, per host and per device, which metrics its line shows.
+- Plugin settings choose, per host and per device, which metrics the line shows; with several hosts the line follows the host the app selects.
 - Samples every 2 s on the daemon, keeps history in memory. Network speed needs Linux; the GPU needs `nvidia-smi` (Linux or Windows).
 
 ### ccusage-stats

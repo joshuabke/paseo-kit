@@ -16,7 +16,7 @@ const LABELS: Record<MetricKey, string> = {
   gpu: "GPU (NVIDIA only)",
 };
 
-/** This host's sidebar line on this device. Settings opened on another host edit that host's line. */
+/** The metrics the sidebar line shows for this host on this device. */
 export function DisplaySettings({ theme, host }: PluginSurfaceProps) {
   const settings = useSettings(displaySettings);
   if (settings.status === "loading") return null;
@@ -55,8 +55,8 @@ export function DisplaySettings({ theme, host }: PluginSurfaceProps) {
         ))}
       </SettingsCard>
       <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, marginTop: 8 }}>
-        Applies to this device only. With every metric off, the host's line disappears. To change
-        another host's line, open this plugin's settings on that host.
+        Applies to this device, while the sidebar shows this host. With every metric off, the line
+        disappears for this host. Other hosts have their own settings.
       </Text>
       {settings.saveError ? (
         <Text style={{ color: theme.colors.statusDanger, fontSize: 12, marginTop: 4 }}>
