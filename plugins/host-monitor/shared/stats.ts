@@ -7,6 +7,8 @@ const sampleSchema = z.object({
   memoryPercent: z.number(),
   rxBytesPerSec: z.number(),
   txBytesPerSec: z.number(),
+  /** Linux: the CPU package sensor in °C; null where the host exposes none (Windows, macOS, most VMs). */
+  cpuTemperatureCelsius: z.number().nullable(),
   /** All NVIDIA GPUs averaged; null on a host without one. */
   gpuPercent: z.number().nullable(),
   /** Power draw of all NVIDIA GPUs added together; null when there is none or it reports none. */

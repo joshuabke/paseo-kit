@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { displaySettings, hiddenMetrics, withMetricShown } from "../shared/settings";
+import { displaySettings, hiddenMetrics, migrateDisplay, withMetricShown } from "../shared/settings";
 
 test("no saved settings hide nothing", () => {
   const values = displaySettings.schema.parse({});
@@ -29,4 +29,37 @@ test("a switch changes only its host and metric", () => {
 
 test("unknown metrics are rejected", () => {
   assert.equal(displaySettings.schema.safeParse({ hidden: { srv_pc: ["fan"] } }).success, false);
+});
+
+/** What Paseo does with a stored document of an older version: migrate, then parse. */
+function readStored(values: unknown, version: number) {
+  return displaySettings.schema.safeParse(migrateDisplay(values, version));
+}
+
+test("version 1: a hidden GPU keeps every GPU figure hidden", () => {
+  // Version 1's "gpu" switch covered load and watts, the only GPU figures the line had.
+  const parsed = readStored({ hidden: { srv_pc: ["gpu", "network"], srv_linux: ["disk"] } }, 1);
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.data?.hidden, {
+    srv_pc: ["gpu", "network", "gpuTemp", "vram", "gpuPower"],
+    srv_linux: ["disk"],
+  });
+});
+
+test("version 1: an empty or default document stays as it is", () => {
+  assert.deepEqual(readStored({}, 1).data, { hidden: {} });
+  assert.deepEqual(readStored({ hidden: { srv_pc: [] } }, 1).data, { hidden: { srv_pc: [] } });
+});
+
+test("an unreadable old document is invalid, not a crash", () => {
+  const broken = [null, "x", 42, { hidden: null }, { hidden: { srv_pc: "gpu" } }, { hidden: { srv_pc: [1] } }];
+  for (const values of broken) {
+    assert.doesNotThrow(() => migrateDisplay(values, 1));
+    assert.equal(readStored(values, 1).success, false);
+  }
+});
+
+test("the settings are version 2 and know how to migrate", () => {
+  assert.equal(displaySettings.version, 2);
+  assert.equal(displaySettings.migrate, migrateDisplay);
 });
