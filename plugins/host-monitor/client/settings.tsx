@@ -16,11 +16,24 @@ import {
 } from "../shared/settings";
 
 const LABELS: Record<MetricKey, string> = {
-  cpu: "CPU",
+  cpu: "CPU usage",
+  cpuTemp: "CPU temperature",
   memory: "RAM",
   disk: "Disk",
   network: "Network speed",
-  gpu: "GPU (NVIDIA only)",
+  gpu: "GPU usage",
+  gpuTemp: "GPU temperature",
+  vram: "VRAM",
+  gpuPower: "GPU power",
+};
+
+// A host that cannot report a figure leaves it out of the line, whatever the switch says.
+const HINTS: Partial<Record<MetricKey, string>> = {
+  cpuTemp: "Linux hosts with a CPU sensor",
+  gpu: "NVIDIA only",
+  gpuTemp: "NVIDIA only",
+  vram: "NVIDIA only",
+  gpuPower: "NVIDIA only",
 };
 
 /** The metrics the sidebar line shows for this host on this device. */
@@ -53,6 +66,7 @@ export function DisplaySettings({ theme, host }: PluginSurfaceProps) {
           <SettingsSwitch
             key={metric}
             label={LABELS[metric]}
+            hint={HINTS[metric]}
             value={!hidden.includes(metric)}
             disabled={settings.saving}
             onValueChange={(shown) => setShown(metric, shown)}

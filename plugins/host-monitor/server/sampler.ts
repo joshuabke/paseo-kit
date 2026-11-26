@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
@@ -32,6 +32,14 @@ const NVIDIA_SMI_ARGS = [
   "--format=csv,noheader,nounits",
 ];
 const MIB = 1024 * 1024;
+// hwmon chips that measure the CPU itself, with the sensor labels to prefer, best first. Without a
+// matching label the chip's first sensor is taken.
+const CPU_SENSOR_LABELS: Record<string, readonly string[]> = {
+  coretemp: ["Package id 0"], // Intel
+  k10temp: ["Tdie", "Tctl"], // AMD; Tctl carries an offset on some models, Tdie does not
+  zenpower: ["Tdie", "Tctl"],
+  cpu_thermal: [], // Raspberry Pi and other ARM boards
+};
 
 interface CpuTimes {
   idle: number;
@@ -205,6 +213,55 @@ async function readNvidiaGpus(): Promise<GpuUsage[] | null> {
   }
 }
 
+function readText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function listDir(path: string): string[] {
+  try {
+    return readdirSync(path).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Linux: the sysfs file that holds the CPU temperature in millidegrees, or null when the host
+ * exposes none (Windows, macOS, most VMs). Looked up once; reading it is a plain file read.
+ * Prefers the CPU's hwmon chip, else a thermal zone for the CPU package.
+ */
+export function findCpuTemperatureFile(sysClass = "/sys/class"): string | null {
+  // ponytail: on a multi-socket host this takes the first CPU only.
+  for (const chip of listDir(`${sysClass}/hwmon`)) {
+    const dir = `${sysClass}/hwmon/${chip}`;
+    const labels = CPU_SENSOR_LABELS[readText(`${dir}/name`) ?? ""];
+    if (!labels) continue;
+    const inputs = listDir(dir).filter((file) => /^temp\d+_input$/.test(file));
+    for (const label of labels) {
+      const input = inputs.find((file) => readText(`${dir}/${file.replace("_input", "_label")}`) === label);
+      if (input) return `${dir}/${input}`;
+    }
+    if (inputs.includes("temp1_input")) return `${dir}/temp1_input`;
+  }
+  for (const zone of listDir(`${sysClass}/thermal`)) {
+    if (!zone.startsWith("thermal_zone")) continue;
+    const type = readText(`${sysClass}/thermal/${zone}/type`) ?? "";
+    if (type === "x86_pkg_temp" || /cpu/i.test(type)) return `${sysClass}/thermal/${zone}/temp`;
+  }
+  return null;
+}
+
+/** °C from a sysfs file in millidegrees; null when it cannot be read (a sensor can fail with EIO). */
+export function readCpuTemperature(file: string): number | null {
+  const text = readText(file);
+  const value = text === null || text === "" ? NaN : Number(text) / 1000;
+  return Number.isFinite(value) ? value : null;
+}
+
 function readNetworkTotals(): NetworkTotals | null {
   let raw: string;
   try {
@@ -326,6 +383,7 @@ export function startSampler({
   let gpus: GpuUsage[] = [];
   let gpuRead: Promise<void> | null = null;
   let gpuReadStartedAt = 0;
+  const cpuTemperatureFile = findCpuTemperatureFile();
 
   // vm_stat runs as a separate process, so each tick uses the reading the previous one started.
   const refreshMacMemory = () => {
@@ -379,6 +437,7 @@ export function startSampler({
       memoryPercent: (memory.usedBytes / memory.totalBytes) * 100,
       rxBytesPerSec: net && previousNet ? Math.max(net.rx - previousNet.rx, 0) / seconds : 0,
       txBytesPerSec: net && previousNet ? Math.max(net.tx - previousNet.tx, 0) / seconds : 0,
+      cpuTemperatureCelsius: cpuTemperatureFile ? readCpuTemperature(cpuTemperatureFile) : null,
       // ponytail: several GPUs share one history line (average load, total power); per-GPU history
       // if a multi-GPU host needs it.
       gpuPercent: utilizations.length > 0 ? sum(utilizations) / utilizations.length : null,
@@ -442,6 +501,7 @@ export function startSampler({
           memoryPercent: 0,
           rxBytesPerSec: 0,
           txBytesPerSec: 0,
+          cpuTemperatureCelsius: null,
           gpuPercent: null,
           gpuWatts: null,
         },
