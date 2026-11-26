@@ -10,7 +10,7 @@
 
 | ID | 名称 | 功能 |
 | --- | --- | --- |
-| [`host-monitor`](plugins/host-monitor) | Host monitor | 在侧边栏底部显示 daemon 主机的 CPU、内存、磁盘和网速，点击查看历史曲线。 |
+| [`host-monitor`](plugins/host-monitor) | Host monitor | 在侧边栏底部显示每台已连接主机的 CPU、内存、磁盘、网速和 NVIDIA GPU，点击查看历史曲线。 |
 | [`ccusage-stats`](plugins/ccusage-stats) | Token usage | 基于 [ccusage](https://github.com/ccusage/ccusage) 统计编码 agent 的 token 消耗与估算费用：今日总量、按日/周/月分 agent 分析、当前 session 消耗，以及可选的 Claude 订阅额度。 |
 | [`file-download`](plugins/file-download) | Download file | 用 Cmd+S 或 Ctrl+S 下载当前预览的文件，包括 `/tmp` 等工作区外的文件。 |
 | [`tab-recovery`](plugins/tab-recovery) | Closed agents | 列出当前工作区里被关闭（即被归档）的 agent，一键重新打开。 |
@@ -18,10 +18,11 @@
 
 ### host-monitor
 
-- 侧边栏底部一行：CPU、内存、磁盘百分比与小进度条，以及共用一个图标的下载 / 上传速度。
+- 每台运行此插件的已连接主机在侧边栏底部各占一行：CPU、内存、磁盘百分比与小进度条，共用一个图标的下载 / 上传速度，有 NVIDIA GPU 的主机还显示 GPU 负载和功耗。
 - 超过 70% 变黄，超过 90% 变红；侧边栏较窄时先隐藏网速，再隐藏磁盘。
-- 弹出层展示每项指标约三分钟的历史、每块本地磁盘的用量、运行时间和负载。
-- daemon 每 2 秒采样一次，历史保存在内存中。网速仅支持 Linux。
+- 弹出层展示每项指标约三分钟的历史、每块本地磁盘的用量、GPU 功耗、显存和温度、运行时间和负载。
+- 插件设置可按主机、按设备选择该行显示哪些指标。
+- daemon 每 2 秒采样一次，历史保存在内存中。网速仅支持 Linux；GPU 需要 `nvidia-smi`（Linux 或 Windows）。
 
 ### ccusage-stats
 
@@ -71,10 +72,11 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| [Paseo](https://github.com/getpaseo/paseo) daemon 与 app | >= 0.11.1 | 在各 `paseo-plugin.json` 的 `requirements.paseo` 中声明。 |
+| [Paseo](https://github.com/getpaseo/paseo) daemon 与 app | >= 0.11.1（`host-monitor`：>= 0.16.0） | 在各 `paseo-plugin.json` 的 `requirements.paseo` 中声明。 |
 | Node.js 与 npm | 建议 Node 22+ | 位于 daemon 主机，用于安装依赖和执行 `ccusage-stats` 的 build 步骤。 |
 | `paseo` CLI | 与 daemon 相同 | 需在 daemon 的 PATH 中，`tab-recovery` 用它恢复 agent。标准安装自带。 |
 | Linux `/proc` | - | `host-monitor` 的网速、可用内存与磁盘列表。其他系统只显示 CPU、内存和根分区。 |
+| `nvidia-smi` | - | 可选，`host-monitor` 在 Linux 与 Windows 上的 GPU 数据。随 NVIDIA 驱动安装。 |
 | ffmpeg（ffprobe 可选） | 建议 6 及以上 | `media-studio` 需要，位于 daemon 主机，需含 libx264；预览 SSH 主机上的文件时，该主机也需要。 |
 | `ssh` 客户端 | - | 仅 `media-studio` 预览 SSH 主机文件时需要，密钥需免交互登录。 |
 
