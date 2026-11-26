@@ -13,7 +13,7 @@ import {
   type LayoutChangeEvent,
   type PressableStateCallbackType,
 } from "react-native";
-import { displaySettings, type MetricKey } from "../shared/settings";
+import { displaySettings, hiddenMetrics, type MetricKey } from "../shared/settings";
 import type { GpuUsage, hostStatsRpc } from "../shared/stats";
 import { formatBytes, formatCompactRate, formatPercent, formatRate, formatUptime } from "./format";
 import {
@@ -234,22 +234,27 @@ function triggerStyle(theme: PluginTheme) {
   });
 }
 
-function describe(stats: HostStats): string {
+/** The line read aloud; it names only the metrics the line shows. */
+function describe(stats: HostStats, hidden: readonly MetricKey[]): string {
   const { current, memory, network, disks } = stats;
-  const parts = [
-    `CPU ${formatPercent(current.cpuPercent)}`,
-    `memory ${formatPercent(memoryPercent(memory))}`,
-  ];
-  if (memory.pressure) parts.push(`memory pressure ${memory.pressure}`);
-  if (disks.length > 0) parts.push(`disk ${formatPercent(sumDisks(disks).percent)}`);
-  if (network) {
+  const shown = (key: MetricKey) => !hidden.includes(key);
+  const parts: string[] = [];
+  if (shown("cpu")) parts.push(`CPU ${formatPercent(current.cpuPercent)}`);
+  if (shown("memory")) {
+    parts.push(`memory ${formatPercent(memoryPercent(memory))}`);
+    if (memory.pressure) parts.push(`memory pressure ${memory.pressure}`);
+  }
+  if (shown("disk") && disks.length > 0) parts.push(`disk ${formatPercent(sumDisks(disks).percent)}`);
+  if (shown("network") && network) {
     parts.push(
       `download ${formatRate(current.rxBytesPerSec)}`,
       `upload ${formatRate(current.txBytesPerSec)}`,
     );
   }
-  if (current.gpuPercent !== null) parts.push(`GPU ${formatPercent(current.gpuPercent)}`);
-  if (current.gpuWatts !== null) parts.push(`GPU power ${formatWatts(current.gpuWatts)}`);
+  if (shown("gpu") && current.gpuPercent !== null) {
+    parts.push(`GPU ${formatPercent(current.gpuPercent)}`);
+    if (current.gpuWatts !== null) parts.push(`GPU power ${formatWatts(current.gpuWatts)}`);
+  }
   return `Host status: ${parts.join(", ")}`;
 }
 
@@ -257,66 +262,59 @@ function layoutWidth(event: LayoutChangeEvent): number {
   return event.nativeEvent.layout.width;
 }
 
-/** The footer line; `openSettings` opens this plugin's settings on the item's host. */
-export function createHostStatusItem(openSettings: () => void) {
-  function Popover(props: PluginPopoverProps) {
-    return <HostPopover {...props} openSettings={openSettings} />;
-  }
+export function HostStatusItem({ theme, host, openPopover }: PluginSidebarItemProps) {
+  const { data } = useHostStats();
+  const settings = useSettings(displaySettings);
+  const [available, setAvailable] = useState<number | null>(null);
+  const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
+  const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
+  const onTemplate = useCallback((e: LayoutChangeEvent) => {
+    const width = Math.ceil(layoutWidth(e));
+    setMeasuredSlot((current) => Math.max(current ?? 0, width));
+  }, []);
 
-  return function HostStatusItem({ theme, host, openPopover }: PluginSidebarItemProps) {
-    const { data } = useHostStats();
-    const settings = useSettings(displaySettings);
-    const [available, setAvailable] = useState<number | null>(null);
-    const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
-    const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
-    const onTemplate = useCallback((e: LayoutChangeEvent) => {
-      const width = Math.ceil(layoutWidth(e));
-      setMeasuredSlot((current) => Math.max(current ?? 0, width));
-    }, []);
+  // Like the built-in usage summary: nothing until there is something to show. Settings that
+  // cannot be read hide nothing.
+  if (!data || settings.status === "loading") return null;
+  const hidden: readonly MetricKey[] =
+    settings.status === "ready" ? hiddenMetrics(settings.values, host.id) : [];
+  const metrics = metricsOf(data).filter((metric) => !hidden.includes(metric.key));
+  if (metrics.length === 0) return null;
+  const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
+  const layout = chooseLayout(available, metrics, slotWidth);
 
-    // Like the built-in usage summary: nothing until there is something to show. Settings that
-    // cannot be read hide nothing.
-    if (!data || settings.status === "loading") return null;
-    const hidden: readonly MetricKey[] =
-      settings.status === "ready" ? (settings.values.hidden[host.id] ?? []) : [];
-    const metrics = metricsOf(data).filter((metric) => !hidden.includes(metric.key));
-    if (metrics.length === 0) return null;
-    const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
-    const layout = chooseLayout(available, metrics, slotWidth);
-
-    return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={describe(data)}
-        onPress={() => openPopover(Popover)}
-        style={triggerStyle(theme)}
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={describe(data, hidden)}
+      onPress={() => openPopover(HostPopover)}
+      style={triggerStyle(theme)}
+    >
+      <View
+        style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", overflow: "hidden" }}
+        onLayout={onAvailable}
       >
-        <View
-          style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", overflow: "hidden" }}
-          onLayout={onAvailable}
-        >
-          <MetricLine theme={theme} layout={layout} slotWidth={slotWidth} />
-        </View>
-        {/* Off-screen templates fix the slot width once, independent of live values. */}
-        <View
-          pointerEvents="none"
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={{ position: "absolute", top: 0, left: 0, width: 10_000, opacity: 0 }}
-        >
-          {SLOT_TEMPLATES.map((template) => (
-            <Text
-              key={template}
-              onLayout={onTemplate}
-              style={{ alignSelf: "flex-start", fontSize: FONT_SIZE, fontVariant: ["tabular-nums"] }}
-            >
-              {template}
-            </Text>
-          ))}
-        </View>
-      </Pressable>
-    );
-  };
+        <MetricLine theme={theme} layout={layout} slotWidth={slotWidth} />
+      </View>
+      {/* Off-screen templates fix the slot width once, independent of live values. */}
+      <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={{ position: "absolute", top: 0, left: 0, width: 10_000, opacity: 0 }}
+      >
+        {SLOT_TEMPLATES.map((template) => (
+          <Text
+            key={template}
+            onLayout={onTemplate}
+            style={{ alignSelf: "flex-start", fontSize: FONT_SIZE, fontVariant: ["tabular-nums"] }}
+          >
+            {template}
+          </Text>
+        ))}
+      </View>
+    </Pressable>
+  );
 }
 
 interface PreviewRowProps {
@@ -484,9 +482,8 @@ function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) 
 function HostPopover({
   theme,
   layout,
-  close,
-  openSettings,
-}: PluginPopoverProps & { openSettings: () => void }) {
+  openScreen,
+}: PluginPopoverProps) {
   const { data } = useHostStats();
   const rootStyle = {
     gap: 10,
@@ -515,10 +512,8 @@ function HostPopover({
             accessibilityRole="button"
             accessibilityLabel="Choose what the sidebar shows for this host"
             hitSlop={8}
-            onPress={() => {
-              close();
-              openSettings();
-            }}
+            // openScreen closes the popover, and on a phone the sidebar drawer.
+            onPress={() => openScreen({ screenId: "display" })}
           >
             <Icon name="SlidersHorizontal" size={ICON_SIZE} color={theme.colors.foregroundMuted} />
           </Pressable>

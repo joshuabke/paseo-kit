@@ -1,12 +1,19 @@
-import { useSettings, type PluginSurfaceProps } from "@getpaseo/plugin/client";
+import type { PluginScreenProps, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { useSettings } from "@getpaseo/plugin/client";
 import {
   SettingsAction,
   SettingsCard,
   SettingsSection,
   SettingsSwitch,
 } from "@getpaseo/plugin/client/ui";
-import { Text } from "react-native";
-import { displaySettings, METRICS, type MetricKey } from "../shared/settings";
+import { ScrollView, Text } from "react-native";
+import {
+  displaySettings,
+  hiddenMetrics,
+  METRICS,
+  withMetricShown,
+  type MetricKey,
+} from "../shared/settings";
 
 const LABELS: Record<MetricKey, string> = {
   cpu: "CPU",
@@ -35,11 +42,9 @@ export function DisplaySettings({ theme, host }: PluginSurfaceProps) {
     );
   }
   const { values, revision } = settings;
-  const hidden = values.hidden[host.id] ?? [];
+  const hidden = hiddenMetrics(values, host.id);
   const setShown = (metric: MetricKey, shown: boolean) => {
-    const next = hidden.filter((key) => key !== metric);
-    if (!shown) next.push(metric);
-    void settings.save({ ...values, hidden: { ...values.hidden, [host.id]: next } }, revision);
+    void settings.save(withMetricShown(values, host.id, metric, shown), revision);
   };
   return (
     <SettingsSection title={`Sidebar line for ${host.label}`}>
@@ -64,5 +69,21 @@ export function DisplaySettings({ theme, host }: PluginSurfaceProps) {
         </Text>
       ) : null}
     </SettingsSection>
+  );
+}
+
+/**
+ * The same settings as a plugin screen, which the popover opens with `openScreen`: unlike
+ * `openSettings`, that closes the sidebar drawer on a phone first.
+ */
+export function DisplayScreen(props: PluginScreenProps) {
+  const { theme, layout } = props;
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
+      contentContainerStyle={{ padding: layout.compact ? 16 : 24 }}
+    >
+      <DisplaySettings {...props} />
+    </ScrollView>
   );
 }

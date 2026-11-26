@@ -21,8 +21,12 @@ const IGNORED_DISK_FS = new Set(["squashfs", "iso9660", "udf", "erofs"]);
 const MAC_COMMAND_TIMEOUT_MS = 1500;
 // kern.memorystatus_vm_pressure_level, as defined by the kernel's kVMPressure* constants.
 const MAC_PRESSURE_LEVELS: Record<string, MemoryPressure> = { "1": "normal", "2": "warning", "4": "critical" };
-// nvidia-smi answers in about 40 ms; a hung driver must not hold up the sample either.
+// nvidia-smi answers in about 40 ms. A hung driver must not hold up the sample either: past this
+// the call is killed, and its last reading no longer counts as current.
 const GPU_COMMAND_TIMEOUT_MS = 1500;
+// The first sample waits this long at most for vm_stat and nvidia-smi. A process stuck in the
+// kernel outlives even SIGKILL, so the wait cannot rely on the command ending.
+const FIRST_SAMPLE_WAIT_MS = GPU_COMMAND_TIMEOUT_MS + 250;
 const NVIDIA_SMI_ARGS = [
   "--query-gpu=name,utilization.gpu,power.draw,power.limit,memory.used,memory.total,temperature.gpu",
   "--format=csv,noheader,nounits",
@@ -187,10 +191,12 @@ export function parseNvidiaSmi(output: string): GpuUsage[] {
  * NVIDIA GPUs from nvidia-smi, run without a shell. Null when the host has no nvidia-smi, so the
  * sampler stops asking; an empty list when it runs but finds no GPU or fails.
  */
-async function readGpus(): Promise<GpuUsage[] | null> {
+async function readNvidiaGpus(): Promise<GpuUsage[] | null> {
   try {
     const { stdout } = await execFileAsync("nvidia-smi", NVIDIA_SMI_ARGS, {
       timeout: GPU_COMMAND_TIMEOUT_MS,
+      // A process that ignores SIGTERM must not live on.
+      killSignal: "SIGKILL",
       windowsHide: true,
     });
     return parseNvidiaSmi(stdout);
@@ -285,7 +291,25 @@ async function readDisks(): Promise<DiskUsage[]> {
 
 export type HostStats = RpcOutput<typeof hostStatsRpc>;
 
-export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
+/** Resolves when `work` settles or after `ms`, whichever comes first. */
+function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    work.then(done, done);
+  });
+}
+
+/** `readGpus` stands in for nvidia-smi in tests. */
+export function startSampler({
+  readGpus = readNvidiaGpus,
+}: { readGpus?: () => Promise<GpuUsage[] | null> } = {}): {
+  read(): Promise<HostStats>;
+  stop(): void;
+} {
   const isMac = process.platform === "darwin";
   const history: HostSample[] = [];
   let previousCpu = readCpuTimes();
@@ -301,6 +325,7 @@ export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
   let gpuAvailable = !isMac;
   let gpus: GpuUsage[] = [];
   let gpuRead: Promise<void> | null = null;
+  let gpuReadStartedAt = 0;
 
   // vm_stat runs as a separate process, so each tick uses the reading the previous one started.
   const refreshMacMemory = () => {
@@ -317,7 +342,11 @@ export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
   // Like vm_stat: each tick uses the reading the previous one started.
   const refreshGpus = () => {
     if (!gpuAvailable) return Promise.resolve();
-    gpuRead ??= readGpus()
+    // ponytail: a call that never ends (stuck in the kernel) stops GPU sampling until the plugin
+    // reloads; starting more would only pile up stuck processes.
+    if (gpuRead) return gpuRead;
+    gpuReadStartedAt = Date.now();
+    gpuRead = readGpus()
       .then((next) => {
         if (next === null) gpuAvailable = false;
         gpus = next ?? [];
@@ -337,6 +366,8 @@ export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
     const idleDelta = cpu.idle - previousCpu.idle;
     if (isMac) void refreshMacMemory();
     memory = macMemory ?? readMemory();
+    // A call still running past its timeout means the last reading is stale.
+    if (gpuRead && now - gpuReadStartedAt > GPU_COMMAND_TIMEOUT_MS) gpus = [];
     void refreshGpus();
     const utilizations = gpus.flatMap((gpu) => gpu.utilizationPercent ?? []);
     const watts = gpus.flatMap((gpu) => gpu.powerWatts ?? []);
@@ -376,8 +407,11 @@ export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
   };
 
   // The first sample waits for vm_stat on macOS, so the history does not open with os.freemem's
-  // figure, and for nvidia-smi, so it does not open without the GPU.
-  const firstSample = Promise.all([isMac ? refreshMacMemory() : null, refreshGpus()]).then(tick);
+  // figure, and for nvidia-smi, so it does not open without the GPU; neither may hold it up.
+  const firstSample = settleWithin(
+    Promise.all([isMac ? refreshMacMemory() : null, refreshGpus()]),
+    FIRST_SAMPLE_WAIT_MS,
+  ).then(tick);
   refreshDisks();
   const timer = setInterval(tick, SAMPLE_INTERVAL_MS);
   const diskTimer = setInterval(refreshDisks, DISK_INTERVAL_MS);
