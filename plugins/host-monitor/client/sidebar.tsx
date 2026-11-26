@@ -1,5 +1,10 @@
 import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
-import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugin/client";
+import {
+  useHosts,
+  useSettings,
+  type PluginPopoverProps,
+  type PluginSidebarItemProps,
+} from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useState } from "react";
 import {
@@ -9,7 +14,8 @@ import {
   type LayoutChangeEvent,
   type PressableStateCallbackType,
 } from "react-native";
-import type { hostStatsRpc } from "../shared/stats";
+import { displaySettings, type MetricKey } from "../shared/settings";
+import type { GpuUsage, hostStatsRpc } from "../shared/stats";
 import { formatBytes, formatCompactRate, formatPercent, formatRate, formatUptime } from "./format";
 import {
   Meter,
@@ -40,8 +46,6 @@ const PAIR_SEPARATOR_WIDTH = 8;
 
 type HostStats = RpcOutput<typeof hostStatsRpc>;
 
-type MetricKey = "cpu" | "memory" | "disk" | "network";
-
 /** Which metrics fit, and whether the percentages get meters. */
 interface LineLayout {
   shown: readonly Metric[];
@@ -60,6 +64,10 @@ interface Metric {
 
 // On a narrow sidebar, network goes first, then disk; CPU and RAM always stay.
 const DROP_ORDER: readonly MetricKey[] = ["network", "disk"];
+
+function formatWatts(watts: number): string {
+  return `${Math.round(watts)}W`;
+}
 
 function metricsOf(stats: HostStats): Metric[] {
   const { current, memory, network, disks } = stats;
@@ -97,11 +105,26 @@ function metricsOf(stats: HostStats): Metric[] {
       texts: [formatCompactRate(current.rxBytesPerSec), formatCompactRate(current.txBytesPerSec)],
     });
   }
+  if (current.gpuPercent !== null) {
+    metrics.push({
+      key: "gpu",
+      icon: "Gpu",
+      texts:
+        current.gpuWatts === null
+          ? [formatPercent(current.gpuPercent)]
+          : [formatPercent(current.gpuPercent), formatWatts(current.gpuWatts)],
+      percent: current.gpuPercent,
+      severity: percentSeverity(current.gpuPercent),
+    });
+  }
   return metrics;
 }
 
-// The widest text a slot can hold: rounded percents top out at 100%, compact rates at 4 characters.
-const SLOT_TEMPLATES = ["100%", "888K", "8.8M"];
+// The widest text a slot can hold: rounded percents top out at 100%, compact rates and GPU watts
+// at 4 characters.
+const SLOT_TEMPLATES = ["100%", "888K", "8.8M", "888W"];
+// The host name in front of the line, when the app knows more than one host.
+const HOST_LABEL_MAX_WIDTH = 72;
 // Used until the templates are measured.
 const ESTIMATED_SLOT_WIDTH = FONT_SIZE * 2.6;
 const TEXT_GAP = 4;
@@ -217,6 +240,7 @@ function triggerStyle(theme: PluginTheme) {
 function describe(stats: HostStats): string {
   const { current, memory, network, disks } = stats;
   const parts = [
+    stats.hostname,
     `CPU ${formatPercent(current.cpuPercent)}`,
     `memory ${formatPercent(memoryPercent(memory))}`,
   ];
@@ -228,61 +252,105 @@ function describe(stats: HostStats): string {
       `upload ${formatRate(current.txBytesPerSec)}`,
     );
   }
-  return `Host status: ${parts.join(", ")}`;
+  if (current.gpuPercent !== null) parts.push(`GPU ${formatPercent(current.gpuPercent)}`);
+  if (current.gpuWatts !== null) parts.push(`GPU power ${formatWatts(current.gpuWatts)}`);
+  return `Host status of ${parts.join(", ")}`;
 }
 
 function layoutWidth(event: LayoutChangeEvent): number {
   return event.nativeEvent.layout.width;
 }
 
-export function HostStatusItem({ theme, openPopover }: PluginSidebarItemProps) {
-  const { data } = useHostStats();
-  const [available, setAvailable] = useState<number | null>(null);
-  const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
-  const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
-  const onTemplate = useCallback((e: LayoutChangeEvent) => {
-    const width = Math.ceil(layoutWidth(e));
-    setMeasuredSlot((current) => Math.max(current ?? 0, width));
-  }, []);
-
-  // Like the built-in usage summary: nothing until there is something to show.
-  if (!data) return null;
-  const metrics = metricsOf(data);
-  const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
-  const layout = chooseLayout(available, metrics, slotWidth);
-
+/** The host's name in front of its line, so lines from several hosts tell apart. */
+function HostLabel({ theme, label }: { theme: PluginTheme; label: string }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={describe(data)}
-      onPress={() => openPopover(HostPopover)}
-      style={triggerStyle(theme)}
+    <Text
+      numberOfLines={1}
+      style={{
+        maxWidth: HOST_LABEL_MAX_WIDTH,
+        marginRight: METRIC_GAP,
+        flexShrink: 0,
+        color: theme.colors.foregroundMuted,
+        fontSize: FONT_SIZE,
+      }}
     >
-      <View
-        style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", overflow: "hidden" }}
-        onLayout={onAvailable}
-      >
-        <MetricLine theme={theme} layout={layout} slotWidth={slotWidth} />
-      </View>
-      {/* Off-screen templates fix the slot width once, independent of live values. */}
-      <View
-        pointerEvents="none"
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        style={{ position: "absolute", top: 0, left: 0, width: 10_000, opacity: 0 }}
-      >
-        {SLOT_TEMPLATES.map((template) => (
-          <Text
-            key={template}
-            onLayout={onTemplate}
-            style={{ alignSelf: "flex-start", fontSize: FONT_SIZE, fontVariant: ["tabular-nums"] }}
-          >
-            {template}
-          </Text>
-        ))}
-      </View>
-    </Pressable>
+      {label}
+    </Text>
   );
+}
+
+/** The footer line of one host; `openSettings` opens this plugin's settings on that host. */
+export function createHostStatusItem(openSettings: () => void) {
+  function Popover(props: PluginPopoverProps) {
+    return <HostPopover {...props} openSettings={openSettings} />;
+  }
+
+  return function HostStatusItem({ theme, host, openPopover }: PluginSidebarItemProps) {
+    const { data } = useHostStats();
+    const settings = useSettings(displaySettings);
+    const hosts = useHosts();
+    const [available, setAvailable] = useState<number | null>(null);
+    const [measuredSlot, setMeasuredSlot] = useState<number | null>(null);
+    const onAvailable = useCallback((e: LayoutChangeEvent) => setAvailable(layoutWidth(e)), []);
+    const onTemplate = useCallback((e: LayoutChangeEvent) => {
+      const width = Math.ceil(layoutWidth(e));
+      setMeasuredSlot((current) => Math.max(current ?? 0, width));
+    }, []);
+
+    // Like the built-in usage summary: nothing until there is something to show. Settings that
+    // cannot be read hide nothing.
+    if (!data || settings.status === "loading") return null;
+    const hidden: readonly MetricKey[] =
+      settings.status === "ready" ? (settings.values.hidden[host.id] ?? []) : [];
+    const metrics = metricsOf(data).filter((metric) => !hidden.includes(metric.key));
+    if (metrics.length === 0) return null;
+    const label = hosts.length > 1 ? <HostLabel theme={theme} label={host.label} /> : null;
+    // A dropped connection keeps the last numbers in the query cache; they are not current.
+    if (hosts.find((candidate) => candidate.serverId === host.id)?.status !== "online") {
+      return (
+        <View style={{ flexDirection: "row", alignItems: "center", minHeight: 28, paddingHorizontal: 8 }}>
+          <HostLabel theme={theme} label={host.label} />
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: FONT_SIZE }}>offline</Text>
+        </View>
+      );
+    }
+    const slotWidth = measuredSlot ?? ESTIMATED_SLOT_WIDTH;
+    const layout = chooseLayout(available, metrics, slotWidth);
+
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={describe(data)}
+        onPress={() => openPopover(Popover)}
+        style={triggerStyle(theme)}
+      >
+        {label}
+        <View
+          style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", overflow: "hidden" }}
+          onLayout={onAvailable}
+        >
+          <MetricLine theme={theme} layout={layout} slotWidth={slotWidth} />
+        </View>
+        {/* Off-screen templates fix the slot width once, independent of live values. */}
+        <View
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{ position: "absolute", top: 0, left: 0, width: 10_000, opacity: 0 }}
+        >
+          {SLOT_TEMPLATES.map((template) => (
+            <Text
+              key={template}
+              onLayout={onTemplate}
+              style={{ alignSelf: "flex-start", fontSize: FONT_SIZE, fontVariant: ["tabular-nums"] }}
+            >
+              {template}
+            </Text>
+          ))}
+        </View>
+      </Pressable>
+    );
+  };
 }
 
 interface PreviewRowProps {
@@ -389,7 +457,70 @@ function DiskSection({ theme, disks }: { theme: PluginTheme; disks: HostStats["d
   );
 }
 
-function HostPopover({ theme, layout }: PluginPopoverProps) {
+/** Power, VRAM and temperature of each GPU, one line per card. */
+function gpuDetail(gpu: GpuUsage): string {
+  const parts: string[] = [];
+  if (gpu.powerWatts !== null) {
+    parts.push(
+      gpu.powerLimitWatts === null
+        ? `${gpu.powerWatts.toFixed(0)} W`
+        : `${gpu.powerWatts.toFixed(0)} / ${gpu.powerLimitWatts.toFixed(0)} W`,
+    );
+  }
+  if (gpu.memoryUsedBytes !== null && gpu.memoryTotalBytes !== null) {
+    parts.push(`VRAM ${formatBytes(gpu.memoryUsedBytes)} / ${formatBytes(gpu.memoryTotalBytes)}`);
+  }
+  if (gpu.temperatureCelsius !== null) parts.push(`${gpu.temperatureCelsius} °C`);
+  return parts.join(" · ");
+}
+
+function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) {
+  const { current, history, gpus } = stats;
+  const powerLimit = gpus.reduce((sum, gpu) => sum + (gpu.powerLimitWatts ?? 0), 0);
+  const [only] = gpus;
+  return (
+    <>
+      {current.gpuPercent !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Gpu"
+          label={gpus.length === 1 && only ? `GPU · ${only.name}` : `GPU · ${gpus.length} GPUs`}
+          value={formatPercent(current.gpuPercent)}
+          color={loadColor(theme, current.gpuPercent)}
+          values={history.map((s) => s.gpuPercent ?? 0)}
+          detail={gpus.length === 1 && only ? gpuDetail(only) : undefined}
+        />
+      ) : null}
+      {gpus.length > 1
+        ? gpus.map((gpu, index) => (
+            <Caption key={index} theme={theme} text={`${gpu.name}: ${gpuDetail(gpu)}`} />
+          ))
+        : null}
+      {current.gpuWatts !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Zap"
+          label={powerLimit > 0 ? `GPU power · limit ${powerLimit.toFixed(0)} W` : "GPU power"}
+          value={`${current.gpuWatts.toFixed(0)} W`}
+          color={theme.colors.accent}
+          // Against the power limit, so a card at its limit fills the chart; else against the peak.
+          values={
+            powerLimit > 0
+              ? history.map((s) => ((s.gpuWatts ?? 0) / powerLimit) * 100)
+              : scaleToPeak(history, (s) => s.gpuWatts ?? 0)
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+
+function HostPopover({
+  theme,
+  layout,
+  close,
+  openSettings,
+}: PluginPopoverProps & { openSettings: () => void }) {
   const { data } = useHostStats();
   const rootStyle = {
     gap: 10,
@@ -410,7 +541,22 @@ function HostPopover({ theme, layout }: PluginPopoverProps) {
   return (
     <View style={rootStyle}>
       <View style={{ gap: 2 }}>
-        <Text style={{ color: theme.colors.foreground, fontSize: FONT_SIZE + 1 }}>{data.hostname}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: ICON_GAP }}>
+          <Text style={{ flex: 1, color: theme.colors.foreground, fontSize: FONT_SIZE + 1 }}>
+            {data.hostname}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose what the sidebar shows for this host"
+            hitSlop={8}
+            onPress={() => {
+              close();
+              openSettings();
+            }}
+          >
+            <Icon name="SlidersHorizontal" size={ICON_SIZE} color={theme.colors.foregroundMuted} />
+          </Pressable>
+        </View>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: FONT_SIZE - 1 }}>
           up {formatUptime(data.uptimeSeconds)} · load{" "}
           {data.loadAverage.map((n) => n.toFixed(2)).join(" ")}
@@ -453,6 +599,7 @@ function HostPopover({ theme, layout }: PluginPopoverProps) {
           />
         </>
       ) : null}
+      {data.gpus.length > 0 ? <GpuSection theme={theme} stats={data} /> : null}
       {disks.length > 0 ? <DiskSection theme={theme} disks={disks} /> : null}
     </View>
   );

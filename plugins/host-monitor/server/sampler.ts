@@ -338,8 +338,8 @@ export function startSampler(): { read(): Promise<HostStats>; stop(): void } {
     if (isMac) void refreshMacMemory();
     memory = macMemory ?? readMemory();
     void refreshGpus();
-    const utilizations = gpus.flatMap((gpu) => (gpu.utilizationPercent === null ? [] : [gpu.utilizationPercent]));
-    const watts = gpus.flatMap((gpu) => (gpu.powerWatts === null ? [] : [gpu.powerWatts]));
+    const utilizations = gpus.flatMap((gpu) => gpu.utilizationPercent ?? []);
+    const watts = gpus.flatMap((gpu) => gpu.powerWatts ?? []);
     const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
     const sample: HostSample = {
