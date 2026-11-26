@@ -14,7 +14,7 @@ import {
   type PressableStateCallbackType,
 } from "react-native";
 import { displaySettings, hiddenMetrics, type MetricKey } from "../shared/settings";
-import type { GpuUsage, hostStatsRpc } from "../shared/stats";
+import { sumGpuMemory, type GpuUsage, type hostStatsRpc } from "../shared/stats";
 import { formatBytes, formatCompactRate, formatPercent, formatRate, formatUptime } from "./format";
 import {
   Meter,
@@ -77,7 +77,7 @@ function formatTemperature(celsius: number): string {
 
 /** Every figure the host reports, in line order; a figure it cannot report is left out. */
 function metricsOf(stats: HostStats): Metric[] {
-  const { current, memory, network, disks, gpus } = stats;
+  const { current, memory, network, disks } = stats;
   const metrics: Metric[] = [];
   const percent = (key: MetricKey, icon: string, name: string, value: number, severity?: Severity) =>
     metrics.push({
@@ -121,10 +121,10 @@ function metricsOf(stats: HostStats): Metric[] {
   }
   if (current.gpuPercent !== null) percent("gpu", "Gpu", "GPU", current.gpuPercent);
   // Several GPUs: the hottest card, and video memory added together.
-  const temperatures = gpus.flatMap((gpu) => gpu.temperatureCelsius ?? []);
-  if (temperatures.length > 0) temperature("gpuTemp", "GPU temperature", Math.max(...temperatures));
-  const vram = sumGpuMemory(gpus);
-  if (vram) percent("vram", "Microchip", "video memory", memoryPercent(vram));
+  if (current.gpuTemperatureCelsius !== null) {
+    temperature("gpuTemp", "GPU temperature", current.gpuTemperatureCelsius);
+  }
+  if (current.vramPercent !== null) percent("vram", "Microchip", "video memory", current.vramPercent);
   if (current.gpuWatts !== null) {
     metrics.push({
       key: "gpuPower",
@@ -134,18 +134,6 @@ function metricsOf(stats: HostStats): Metric[] {
     });
   }
   return metrics;
-}
-
-/** Video memory of the GPUs that report it, added together; null when none does. */
-function sumGpuMemory(gpus: readonly GpuUsage[]): { usedBytes: number; totalBytes: number } | null {
-  let usedBytes = 0;
-  let totalBytes = 0;
-  for (const gpu of gpus) {
-    if (gpu.memoryUsedBytes === null || !gpu.memoryTotalBytes) continue;
-    usedBytes += gpu.memoryUsedBytes;
-    totalBytes += gpu.memoryTotalBytes;
-  }
-  return totalBytes > 0 ? { usedBytes, totalBytes } : null;
 }
 
 // The widest text a slot can hold: rounded percents top out at 100%, compact rates and GPU watts
@@ -452,6 +440,7 @@ function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) 
   const { current, history, gpus } = stats;
   const powerLimit = gpus.reduce((sum, gpu) => sum + (gpu.powerLimitWatts ?? 0), 0);
   const single = gpus.length === 1 ? gpus[0] : undefined;
+  const vram = sumGpuMemory(gpus);
   return (
     <>
       {current.gpuPercent !== null ? (
@@ -470,6 +459,27 @@ function GpuSection({ theme, stats }: { theme: PluginTheme; stats: HostStats }) 
             <Caption key={index} theme={theme} text={`${gpu.name}: ${gpuDetail(gpu)}`} />
           ))
         : null}
+      {current.gpuTemperatureCelsius !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Thermometer"
+          label={single ? "GPU temperature" : "GPU temperature · hottest"}
+          value={`${Math.round(current.gpuTemperatureCelsius)} °C`}
+          color={severityColor(theme, temperatureSeverity(current.gpuTemperatureCelsius))}
+          // Degrees on a 0-100 scale, like the CPU temperature.
+          values={history.map((s) => s.gpuTemperatureCelsius ?? 0)}
+        />
+      ) : null}
+      {current.vramPercent !== null ? (
+        <PreviewRow
+          theme={theme}
+          icon="Microchip"
+          label={vram ? `VRAM · ${formatBytes(vram.usedBytes)} / ${formatBytes(vram.totalBytes)}` : "VRAM"}
+          value={formatPercent(current.vramPercent)}
+          color={loadColor(theme, current.vramPercent)}
+          values={history.map((s) => s.vramPercent ?? 0)}
+        />
+      ) : null}
       {current.gpuWatts !== null ? (
         <PreviewRow
           theme={theme}

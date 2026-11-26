@@ -13,6 +13,10 @@ const sampleSchema = z.object({
   gpuPercent: z.number().nullable(),
   /** Power draw of all NVIDIA GPUs added together; null when there is none or it reports none. */
   gpuWatts: z.number().nullable(),
+  /** The hottest NVIDIA GPU in °C; null when there is none or it reports none. */
+  gpuTemperatureCelsius: z.number().nullable(),
+  /** Video memory of all NVIDIA GPUs added together, as a percent of their total; null without one. */
+  vramPercent: z.number().nullable(),
 });
 
 /** One NVIDIA GPU as nvidia-smi reports it; a field the card does not report is null. */
@@ -68,6 +72,18 @@ export const hostStatsRpc = defineRpc({
     history: z.array(sampleSchema),
   }),
 });
+
+/** Video memory of the GPUs that report it, added together; null when none does. */
+export function sumGpuMemory(gpus: readonly GpuUsage[]): { usedBytes: number; totalBytes: number } | null {
+  let usedBytes = 0;
+  let totalBytes = 0;
+  for (const gpu of gpus) {
+    if (gpu.memoryUsedBytes === null || !gpu.memoryTotalBytes) continue;
+    usedBytes += gpu.memoryUsedBytes;
+    totalBytes += gpu.memoryTotalBytes;
+  }
+  return totalBytes > 0 ? { usedBytes, totalBytes } : null;
+}
 
 export type HostSample = z.infer<typeof sampleSchema>;
 export type GpuUsage = z.infer<typeof gpuSchema>;
